@@ -133,8 +133,9 @@ def create_bpe_tokenizer(vocab_size: int) -> tuple[Tokenizer, trainers.BpeTraine
     
     # Set up pretokenizer: Metaspace + Digits split
     # Metaspace replaces spaces with ▁ and adds prefix space
+    # Note: newer tokenizers versions use prepend_scheme instead of add_prefix_space
     tokenizer.pre_tokenizer = pre_tokenizers.Sequence([
-        pre_tokenizers.Metaspace(replacement="▁", add_prefix_space=True),
+        pre_tokenizers.Metaspace(replacement="▁", prepend_scheme="always"),
         pre_tokenizers.Digits(individual_digits=True),
     ])
     
