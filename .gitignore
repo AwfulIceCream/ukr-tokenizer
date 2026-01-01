@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+*.whl
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Hugging Face / transformers cache (big)
+.cache/
+huggingface/
+hf_cache/
+**/.cache/huggingface/
+**/.cache/torch/
+**/.cache/transformers/
+
+# Outputs / reports (generated)
+comparison_results*.json
+test_evaluation*.json
+reports/
+outputs/
+out.jsonl
+*.jsonl
+figures/
+
+# Local corpora / datasets
+data/
+corpus/
+*.txt
+*.tsv
+*.csv
+*.parquet
+
+
+# ukr_bpe_tokenizer/
+# ukr_bpe_tokenizer/tokenizer.json
+# ukr_bpe_tokenizer/vocab.json
+# ukr_bpe_tokenizer/merges.txt
