@@ -63,7 +63,6 @@ figures/
 # Local corpora / datasets
 data/
 corpus/
-*.txt
 *.tsv
 *.csv
 *.parquet
