@@ -26,13 +26,11 @@ except ImportError as e:
     sys.exit(1)
 
 from tokenizer_utils import (
-    load_hf_tokenizer,
-    load_local_tokenizer,
     load_corpus_kobza,
     load_corpus_file,
     split_text_into_words,
-    tokenize_word,
     preprocess_text,
+    load_hf_tokenizer,
 )
 
 
@@ -458,7 +456,10 @@ def main():
 
     # Load tokenizer
     if args.model_id:
-        tokenizer = load_hf_tokenizer(args.model_id)
+        tokenizer, _name = load_hf_tokenizer(args.model_id)
+        if tokenizer is None:
+            print(f"Error: Could not load HF tokenizer for model_id={args.model_id}")
+            sys.exit(1)
         tokenizer_name = args.model_id
     else:
         tokenizer = load_tokenizer(args.tokenizer_path)
