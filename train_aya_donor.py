@@ -9,14 +9,16 @@ be used as a donor tokenizer for build_hybrid_tokenizer.py.
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Iterable, List
 
 try:
     from transformers import AutoTokenizer
+    from tqdm import tqdm
 except ImportError:
     print("Error: Missing required package. Please install dependencies:")
-    print("  pip install transformers")
+    print("  pip install transformers tqdm")
     sys.exit(1)
 
 from tokenizer_utils import load_corpus_file, load_corpus_kobza, preprocess_text
@@ -101,14 +103,14 @@ def load_corpus(corpus: str, samples: int, input_file: str | None) -> List[str]:
 
 
 def batch_iterator(texts: List[str], batch_size: int) -> Iterable[List[str]]:
-    batch: List[str] = []
-    for text in texts:
-        batch.append(text)
-        if len(batch) >= batch_size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
+    total_batches = (len(texts) + batch_size - 1) // batch_size
+    for start in tqdm(
+        range(0, len(texts), batch_size),
+        total=total_batches,
+        desc="Tokenizer training batches",
+        unit="batch",
+    ):
+        yield texts[start : start + batch_size]
 
 
 def save_vocab_dump(tokenizer, output_dir: Path) -> None:
@@ -139,11 +141,14 @@ def main() -> int:
     print(f"Loaded {len(texts):,} training samples")
 
     print("Training Aya-compatible donor tokenizer...")
+    train_start = time.perf_counter()
     donor_tokenizer = tokenizer.train_new_from_iterator(
         batch_iterator(texts, args.batch_size),
         vocab_size=target_vocab_size,
         length=len(texts),
     )
+    train_elapsed = time.perf_counter() - train_start
+    total_batches = (len(texts) + args.batch_size - 1) // args.batch_size
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -155,6 +160,10 @@ def main() -> int:
         print(f"Saved tokenizer to: {tokenizer_json_path}")
     print(f"Saved donor tokenizer directory to: {output_dir}")
     print(f"Final vocabulary size: {len(donor_tokenizer):,}")
+    print(f"Training time: {train_elapsed:.1f} sec")
+    if train_elapsed > 0:
+        print(f"Average speed: {len(texts) / train_elapsed:,.1f} texts/sec")
+        print(f"Batch throughput: {total_batches / train_elapsed:,.2f} batches/sec")
 
     return 0
 
