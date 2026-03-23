@@ -49,6 +49,12 @@ def parse_args():
         description="Compare your tokenizer against several LLM tokenizers",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    parser.add_argument(
+        "--tokenizer-path",
+        type=str,
+        default="ukr_bpe_tokenizer",
+        help="Path to local tokenizer directory or tokenizer.json file",
+    )
     parser.add_argument("--samples", type=int, default=10000, help="Number of samples from corpus")
     parser.add_argument("--output-report", type=str, default="comparison_results.json", help="Output JSON report path")
     parser.add_argument("--input-file", type=str, help="Path to input text file (if not using Kobza corpus)")
@@ -305,7 +311,7 @@ def main():
     tokenizers_to_evaluate = []
 
     print("\nLoading tokenizers...")
-    local_tok, local_name = load_local_tokenizer()
+    local_tok, local_name = load_local_tokenizer(args.tokenizer_path)
     if local_tok:
         tokenizers_to_evaluate.append((local_tok, local_name))
 
