@@ -13,6 +13,7 @@ This script:
 import argparse
 import json
 import sys
+import re
 from pathlib import Path
 from typing import Dict, List
 
@@ -32,6 +33,31 @@ from tokenizer_utils import (
     preprocess_text,
     load_hf_tokenizer,
 )
+
+_URLISH_RE = re.compile(r"(?i)\b(?:https?://|www\.)")
+_PCT_ENCODED_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+_BASE64ISH_RE = re.compile(r"^[A-Za-z0-9+/]{80,}={0,2}$")
+_SERIALIZEDISH_RE = re.compile(r"(?i)(^a:\d+:\{|_token\";s:\d+:|_previous\";a:\d+:\{)")
+
+
+def is_noisy_word(word: str, max_len: int) -> bool:
+    """
+    Heuristic filter for junk tokens that skew fertility examples/metrics:
+    very long strings, URLs, percent-encoded blobs, base64-ish, serialized-ish.
+    """
+    if not word:
+        return True
+    if len(word) > max_len:
+        return True
+    if _URLISH_RE.search(word):
+        return True
+    if _PCT_ENCODED_RE.search(word) and len(word) > 40:
+        return True
+    if _BASE64ISH_RE.match(word):
+        return True
+    if _SERIALIZEDISH_RE.search(word):
+        return True
+    return False
 
 
 def parse_args():
@@ -86,6 +112,17 @@ def parse_args():
         default=5,
         help="Number of OOV word examples to show",
     )
+    parser.add_argument(
+        "--ignore-noisy-words",
+        action="store_true",
+        help="Ignore URL/base64/serialized/very-long 'words' in fertility stats (recommended for web-scale corpora)",
+    )
+    parser.add_argument(
+        "--max-word-chars",
+        type=int,
+        default=64,
+        help="Max word length before it is considered noise (used with --ignore-noisy-words; also used to filter displayed examples)",
+    )
 
     args = parser.parse_args()
 
@@ -133,6 +170,8 @@ def load_tokenizer(tokenizer_path: str) -> Tokenizer:
 def calculate_fertility(
     tokenizer: Tokenizer,
     texts: List[str],
+    ignore_noisy_words: bool = False,
+    max_word_chars: int = 64,
 ) -> Dict:
     """
     Calculate token fertility metrics (tokens per word).
@@ -157,6 +196,9 @@ def calculate_fertility(
         words = split_text_into_words(text)
 
         for word in words:
+            if ignore_noisy_words and is_noisy_word(word, max_word_chars):
+                continue
+
             # Tokenize word individually using helper function
             tokens = tokenize_word(tokenizer, word)
             num_tokens = len(tokens)
@@ -166,7 +208,8 @@ def calculate_fertility(
             total_tokens += num_tokens
 
             # Store examples of high-fertility words
-            if num_tokens >= 5 and word not in word_examples:
+            # Always filter examples so reports don't get dominated by URL/base64 blobs.
+            if num_tokens >= 5 and (not is_noisy_word(word, max_word_chars)) and word not in word_examples:
                 word_examples[word] = num_tokens
 
         pbar.update(1)
@@ -476,7 +519,12 @@ def main():
         sys.exit(1)
 
     # Calculate metrics
-    fertility = calculate_fertility(tokenizer, texts)
+    fertility = calculate_fertility(
+        tokenizer,
+        texts,
+        ignore_noisy_words=args.ignore_noisy_words,
+        max_word_chars=args.max_word_chars,
+    )
     oov = calculate_oov(tokenizer, texts)
 
     # Print report
