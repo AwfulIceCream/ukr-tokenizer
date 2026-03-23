@@ -104,6 +104,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow surgery even when compatibility checks fail. Use only if you know the tokenizer families match in practice.",
     )
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Pass trust_remote_code=True when loading Hugging Face tokenizers.",
+    )
     args = parser.parse_args()
 
     if args.replace_count is None and args.replace_tail_start_id is None:
@@ -118,7 +123,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def load_tokenizer_artifacts(spec: str, temp_root: Path) -> TokenizerArtifacts:
+def load_tokenizer_artifacts(spec: str, temp_root: Path, trust_remote_code: bool = False) -> TokenizerArtifacts:
     local_path = Path(spec)
 
     if local_path.exists():
@@ -135,7 +140,11 @@ def load_tokenizer_artifacts(spec: str, temp_root: Path) -> TokenizerArtifacts:
         artifact_dir = temp_root / re.sub(r"[^A-Za-z0-9._-]+", "_", spec)
         artifact_dir.mkdir(parents=True, exist_ok=True)
 
-        tokenizer = AutoTokenizer.from_pretrained(spec, trust_remote_code=True, use_fast=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            spec,
+            trust_remote_code=trust_remote_code,
+            use_fast=True,
+        )
         tokenizer.save_pretrained(artifact_dir)
         tokenizer_json_path = artifact_dir / "tokenizer.json"
         if not tokenizer_json_path.exists():
@@ -172,11 +181,21 @@ def normalize_merges(merges: Sequence) -> List[Tuple[str, str]]:
 
 def tokenize_component_signature(data: Dict) -> Dict:
     model = data.get("model", {})
+    continuing_subword_prefix = model.get("continuing_subword_prefix")
+    end_of_word_suffix = model.get("end_of_word_suffix")
+
+    # Aya-family tokenizers can serialize these as null in the base tokenizer and
+    # as empty strings after train_new_from_iterator(); treat them as equivalent.
+    if continuing_subword_prefix == "":
+        continuing_subword_prefix = None
+    if end_of_word_suffix == "":
+        end_of_word_suffix = None
+
     return {
         "model_type": model.get("type"),
         "byte_fallback": model.get("byte_fallback"),
-        "continuing_subword_prefix": model.get("continuing_subword_prefix"),
-        "end_of_word_suffix": model.get("end_of_word_suffix"),
+        "continuing_subword_prefix": continuing_subword_prefix,
+        "end_of_word_suffix": end_of_word_suffix,
         "unk_token": model.get("unk_token"),
         "normalizer": data.get("normalizer"),
         "pre_tokenizer": data.get("pre_tokenizer"),
@@ -386,8 +405,16 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="hybrid_tokenizer_") as temp_dir_name:
         temp_root = Path(temp_dir_name)
 
-        base_artifacts = load_tokenizer_artifacts(args.base_tokenizer, temp_root / "base")
-        donor_artifacts = load_tokenizer_artifacts(args.donor_tokenizer, temp_root / "donor")
+        base_artifacts = load_tokenizer_artifacts(
+            args.base_tokenizer,
+            temp_root / "base",
+            trust_remote_code=args.trust_remote_code,
+        )
+        donor_artifacts = load_tokenizer_artifacts(
+            args.donor_tokenizer,
+            temp_root / "donor",
+            trust_remote_code=args.trust_remote_code,
+        )
 
         mismatches = compatibility_report(base_artifacts.data, donor_artifacts.data)
         if mismatches and not args.force:
