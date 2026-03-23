@@ -182,11 +182,11 @@ def split_text_into_words(text: str) -> List[str]:
 def tokenize_text(tokenizer, text: str) -> List[int]:
     """
     Tokenize text with the given tokenizer.
-    For HF tokenizers, special tokens are disabled for fair comparison.
+    Special tokens are disabled for fair comparison across local and HF tokenizers.
     """
     try:
         if isinstance(tokenizer, Tokenizer):
-            return tokenizer.encode(text).ids
+            return tokenizer.encode(text, add_special_tokens=False).ids
         return tokenizer.encode(text, add_special_tokens=False, truncation=False)
     except Exception as e:
         print(f"Tokenization error: {e}")

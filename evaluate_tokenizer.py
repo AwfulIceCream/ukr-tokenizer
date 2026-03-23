@@ -285,12 +285,12 @@ def calculate_oov(
         # Encode full text
         if isinstance(tokenizer, Tokenizer):
             # Local tokenizer
-            encoding = tokenizer.encode(text)
+            encoding = tokenizer.encode(text, add_special_tokens=False)
             token_ids = encoding.ids
             token_strs = encoding.tokens
         else:
             # HuggingFace tokenizer
-            token_ids = tokenizer.encode(text)
+            token_ids = tokenizer.encode(text, add_special_tokens=False, truncation=False)
             # Try to get token strings if available
             try:
                 token_strs = tokenizer.convert_ids_to_tokens(token_ids)
@@ -344,11 +344,11 @@ def tokenize_word(tokenizer, word: str) -> List[int]:
     """
     if isinstance(tokenizer, Tokenizer):
         # Local BPE tokenizer
-        encoding = tokenizer.encode(word)
+        encoding = tokenizer.encode(word, add_special_tokens=False)
         return encoding.ids
     else:
         # HuggingFace tokenizer
-        tokens = tokenizer.encode(word)
+        tokens = tokenizer.encode(word, add_special_tokens=False, truncation=False)
         return tokens
 
 
