@@ -16,6 +16,7 @@ Supports:
 - `evaluate_tokenizer.py` — evaluate one tokenizer (local or HF) and save a JSON report
 - `compare_tokenizers.py` — compare multiple tokenizers, print a ranked table, save a JSON report
 - `compare_reports.py` — compare multiple saved JSON reports
+- `prepare_kobza_corpus.py` — download Kobza locally, preprocess it once, and export a fast local text file for repeated runs
 - `train_aya_donor.py` — train an Aya-compatible donor tokenizer with the same tokenizer family as the base Aya tokenizer
 - `build_hybrid_tokenizer.py` — transplant donor BPE tokens into a base tokenizer when both tokenizers share the same tokenizer-family settings
 - `tokenizer_utils.py` — shared utilities (normalization, corpus loading, tokenization)
@@ -89,6 +90,21 @@ python build_hybrid_tokenizer.py ^
   --cyrillic-only
 ```
 
+For large byte-level tokenizers such as Aya, use a more controlled dry run first:
+
+```bash
+python build_hybrid_tokenizer.py ^
+  --base-tokenizer CohereLabs/aya-expanse-8b ^
+  --donor-tokenizer aya_uk_donor ^
+  --output-dir aya_uk_hybrid_plan ^
+  --replace-tail-start-id 220000 ^
+  --replace-existing-cyrillic ^
+  --max-top-level-tokens 20000 ^
+  --max-closure-size 16 ^
+  --donor-id-max 180000 ^
+  --dry-run
+```
+
 The script writes:
 - `hybrid_tokenizer/tokenizer.json`
 - `hybrid_tokenizer/merge_info.json`
@@ -101,14 +117,31 @@ Important limitation:
   directly only into another `Metaspace + BPE` tokenizer with matching settings.
 - If you want an Aya-style result for a byte-level tokenizer, first train a
   Ukrainian donor tokenizer in the Aya tokenizer format, then run this script.
+- For byte-level tokenizers, `--cyrillic-only` is usually the wrong filter,
+  because Ukrainian bytes are often stored as byte-level symbols rather than
+  literal Cyrillic characters in `vocab`.
+- Use `--max-top-level-tokens`, `--max-closure-size`, `--donor-id-min`,
+  `--donor-id-max`, and `--dry-run` to make large vocab surgery more controlled.
 
 ### 6) Train an Aya-compatible donor tokenizer
 
 Train a donor tokenizer from the Aya tokenizer family on Ukrainian text:
 
+For the fastest repeated workflow, first export Kobza to a local file:
+
+```bash
+python prepare_kobza_corpus.py ^
+  --samples 100000 ^
+  --output-file data/kobza_uk.txt
+```
+
+Then train from that local file instead of remote streaming:
+
 ```bash
 python train_aya_donor.py ^
   --base-tokenizer CohereLabs/aya-expanse-8b ^
+  --corpus file ^
+  --input-file data/kobza_uk.txt ^
   --samples 100000 ^
   --output aya_uk_donor ^
   --trust-remote-code
