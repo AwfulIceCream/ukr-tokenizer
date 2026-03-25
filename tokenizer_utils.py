@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 try:
-    from datasets import load_dataset
     from tokenizers import Tokenizer
     from transformers import AutoTokenizer
     from tqdm import tqdm
@@ -118,6 +117,7 @@ def load_corpus_kobza(num_samples: int) -> List[str]:
     print("\nLoading Kobza dataset (Goader/kobza)...")
 
     try:
+        from datasets import load_dataset
         dataset = load_dataset("Goader/kobza", split="train", streaming=True)
     except Exception as e:
         print(f"Error loading dataset: {e}")
