@@ -7,11 +7,12 @@ be used as a donor tokenizer for build_hybrid_tokenizer.py.
 """
 
 import argparse
+import glob
 import json
 import sys
 import time
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, Iterator, List, Optional
 
 try:
     from transformers import AutoTokenizer
@@ -21,7 +22,7 @@ except ImportError:
     print("  pip install transformers tqdm")
     sys.exit(1)
 
-from tokenizer_utils import load_corpus_file, load_corpus_kobza, preprocess_text
+from tokenizer_utils import load_corpus_kobza, preprocess_text
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,7 +46,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input-file",
         type=str,
-        help="Path to local UTF-8 text file, one sample per line (required for --corpus file).",
+        help="Path to local UTF-8 text file, one sample per line.",
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=str,
+        help="Path to a directory of local UTF-8 text shards.",
+    )
+    parser.add_argument(
+        "--input-glob",
+        type=str,
+        help="Glob for local UTF-8 text shards, for example 'data/hf_test/*.txt'.",
     )
     parser.add_argument(
         "--samples",
@@ -77,8 +88,13 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args()
 
-    if args.corpus == "file" and not args.input_file:
-        parser.error("--input-file is required when --corpus is 'file'")
+    if args.corpus == "file":
+        file_inputs = [args.input_file, args.input_dir, args.input_glob]
+        if sum(value is not None for value in file_inputs) != 1:
+            parser.error(
+                "When --corpus is 'file', provide exactly one of "
+                "--input-file, --input-dir, or --input-glob."
+            )
     if args.samples <= 0:
         parser.error("--samples must be > 0")
     if args.batch_size <= 0:
@@ -89,12 +105,40 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def load_corpus(corpus: str, samples: int, input_file: str | None) -> List[str]:
-    if corpus == "file":
-        texts = load_corpus_file(input_file, samples)
-    else:
-        texts = load_corpus_kobza(samples)
+def resolve_input_paths(
+    input_file: Optional[str],
+    input_dir: Optional[str],
+    input_glob: Optional[str],
+) -> List[Path]:
+    if input_file is not None:
+        path = Path(input_file)
+        if not path.exists():
+            print(f"Error: File not found: {path}")
+            sys.exit(1)
+        return [path]
 
+    if input_dir is not None:
+        directory = Path(input_dir)
+        if not directory.exists() or not directory.is_dir():
+            print(f"Error: Directory not found: {directory}")
+            sys.exit(1)
+        paths = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() == ".txt")
+        if not paths:
+            print(f"Error: No .txt files found in directory: {directory}")
+            sys.exit(1)
+        return paths
+
+    assert input_glob is not None
+    paths = sorted(Path(path) for path in glob.glob(input_glob))
+    paths = [path for path in paths if path.is_file()]
+    if not paths:
+        print(f"Error: No files matched glob: {input_glob}")
+        sys.exit(1)
+    return paths
+
+
+def load_kobza_corpus(samples: int) -> List[str]:
+    texts = load_corpus_kobza(samples)
     cleaned = [preprocess_text(text) for text in texts if preprocess_text(text).strip()]
     if not cleaned:
         print("Error: No usable texts were loaded from the corpus.")
@@ -102,7 +146,49 @@ def load_corpus(corpus: str, samples: int, input_file: str | None) -> List[str]:
     return cleaned
 
 
-def batch_iterator(texts: List[str], batch_size: int) -> Iterable[List[str]]:
+class FileBatchIterator:
+    def __init__(self, paths: List[Path], sample_limit: int, batch_size: int):
+        self.paths = paths
+        self.sample_limit = sample_limit
+        self.batch_size = batch_size
+        self.yielded_texts = 0
+        self.yielded_batches = 0
+
+    def __iter__(self) -> Iterator[List[str]]:
+        batch: List[str] = []
+        pbar = tqdm(total=self.sample_limit, desc="Tokenizer training texts", unit="text")
+        try:
+            for path in self.paths:
+                print(f"Reading shard: {path}")
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if self.yielded_texts >= self.sample_limit:
+                            break
+
+                        processed = preprocess_text(line.strip())
+                        if not processed:
+                            continue
+
+                        batch.append(processed)
+                        self.yielded_texts += 1
+                        pbar.update(1)
+
+                        if len(batch) >= self.batch_size:
+                            self.yielded_batches += 1
+                            yield batch
+                            batch = []
+
+                if self.yielded_texts >= self.sample_limit:
+                    break
+
+            if batch:
+                self.yielded_batches += 1
+                yield batch
+        finally:
+            pbar.close()
+
+
+def list_batch_iterator(texts: List[str], batch_size: int) -> Iterable[List[str]]:
     total_batches = (len(texts) + batch_size - 1) // batch_size
     for start in tqdm(
         range(0, len(texts), batch_size),
@@ -137,18 +223,35 @@ def main() -> int:
     print(f"Base vocabulary size: {base_vocab_size:,}")
     print(f"Target vocabulary size: {target_vocab_size:,}")
 
-    texts = load_corpus(args.corpus, args.samples, args.input_file)
-    print(f"Loaded {len(texts):,} training samples")
+    train_kwargs = {"vocab_size": target_vocab_size}
+    actual_text_count: Optional[int] = None
+    total_batches: Optional[int] = None
+
+    if args.corpus == "file":
+        paths = resolve_input_paths(args.input_file, args.input_dir, args.input_glob)
+        print(f"Training from {len(paths):,} local text file(s)")
+        iterator = FileBatchIterator(paths, sample_limit=args.samples, batch_size=args.batch_size)
+        train_iterator: Iterable[List[str]] = iterator
+    else:
+        texts = load_kobza_corpus(args.samples)
+        print(f"Loaded {len(texts):,} training samples")
+        train_iterator = list_batch_iterator(texts, args.batch_size)
+        train_kwargs["length"] = len(texts)
+        actual_text_count = len(texts)
+        total_batches = (len(texts) + args.batch_size - 1) // args.batch_size
 
     print("Training Aya-compatible donor tokenizer...")
     train_start = time.perf_counter()
     donor_tokenizer = tokenizer.train_new_from_iterator(
-        batch_iterator(texts, args.batch_size),
-        vocab_size=target_vocab_size,
-        length=len(texts),
+        train_iterator,
+        **train_kwargs,
     )
     train_elapsed = time.perf_counter() - train_start
-    total_batches = (len(texts) + args.batch_size - 1) // args.batch_size
+
+    if args.corpus == "file":
+        actual_text_count = iterator.yielded_texts
+        total_batches = iterator.yielded_batches
+        print(f"Consumed {actual_text_count:,} training samples from local files")
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -161,8 +264,8 @@ def main() -> int:
     print(f"Saved donor tokenizer directory to: {output_dir}")
     print(f"Final vocabulary size: {len(donor_tokenizer):,}")
     print(f"Training time: {train_elapsed:.1f} sec")
-    if train_elapsed > 0:
-        print(f"Average speed: {len(texts) / train_elapsed:,.1f} texts/sec")
+    if train_elapsed > 0 and actual_text_count is not None and total_batches is not None:
+        print(f"Average speed: {actual_text_count / train_elapsed:,.1f} texts/sec")
         print(f"Batch throughput: {total_batches / train_elapsed:,.2f} batches/sec")
 
     return 0
