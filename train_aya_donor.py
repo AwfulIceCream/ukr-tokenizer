@@ -7,6 +7,7 @@ be used as a donor tokenizer for build_hybrid_tokenizer.py.
 """
 
 import argparse
+import codecs
 import glob
 import json
 import sys
@@ -95,8 +96,10 @@ def parse_args() -> argparse.Namespace:
                 "When --corpus is 'file', provide exactly one of "
                 "--input-file, --input-dir, or --input-glob."
             )
-    if args.samples <= 0:
-        parser.error("--samples must be > 0")
+    if args.corpus != "file" and args.samples <= 0:
+        parser.error("--samples must be > 0 unless --corpus file is used")
+    if args.corpus == "file" and args.samples < 0:
+        parser.error("--samples must be >= 0")
     if args.batch_size <= 0:
         parser.error("--batch-size must be > 0")
     if args.vocab_size is not None and args.vocab_size <= 0:
@@ -147,39 +150,60 @@ def load_kobza_corpus(samples: int) -> List[str]:
 
 
 class FileBatchIterator:
-    def __init__(self, paths: List[Path], sample_limit: int, batch_size: int):
+    def __init__(self, paths: List[Path], sample_limit: Optional[int], batch_size: int):
         self.paths = paths
         self.sample_limit = sample_limit
         self.batch_size = batch_size
         self.yielded_texts = 0
         self.yielded_batches = 0
 
+    def _iter_lines(self) -> Iterator[str]:
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        buffer = ""
+
+        for path in self.paths:
+            print(f"Reading shard: {path}")
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+
+                    buffer += decoder.decode(chunk)
+
+                    while True:
+                        newline_pos = buffer.find("\n")
+                        if newline_pos < 0:
+                            break
+
+                        line = buffer[:newline_pos]
+                        buffer = buffer[newline_pos + 1 :]
+                        yield line.rstrip("\r")
+
+        buffer += decoder.decode(b"", final=True)
+        if buffer:
+            yield buffer.rstrip("\r")
+
     def __iter__(self) -> Iterator[List[str]]:
         batch: List[str] = []
         pbar = tqdm(total=self.sample_limit, desc="Tokenizer training texts", unit="text")
         try:
-            for path in self.paths:
-                print(f"Reading shard: {path}")
-                with open(path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if self.yielded_texts >= self.sample_limit:
-                            break
-
-                        processed = preprocess_text(line.strip())
-                        if not processed:
-                            continue
-
-                        batch.append(processed)
-                        self.yielded_texts += 1
-                        pbar.update(1)
-
-                        if len(batch) >= self.batch_size:
-                            self.yielded_batches += 1
-                            yield batch
-                            batch = []
-
-                if self.yielded_texts >= self.sample_limit:
+            for line in self._iter_lines():
+                if self.sample_limit is not None and self.yielded_texts >= self.sample_limit:
                     break
+
+                processed = preprocess_text(line.strip())
+                if not processed:
+                    continue
+
+                batch.append(processed)
+                self.yielded_texts += 1
+                pbar.update(1)
+
+                if len(batch) >= self.batch_size:
+                    self.yielded_batches += 1
+                    yield batch
+                    batch = []
 
             if batch:
                 self.yielded_batches += 1
@@ -230,7 +254,8 @@ def main() -> int:
     if args.corpus == "file":
         paths = resolve_input_paths(args.input_file, args.input_dir, args.input_glob)
         print(f"Training from {len(paths):,} local text file(s)")
-        iterator = FileBatchIterator(paths, sample_limit=args.samples, batch_size=args.batch_size)
+        sample_limit = args.samples if args.samples > 0 else None
+        iterator = FileBatchIterator(paths, sample_limit=sample_limit, batch_size=args.batch_size)
         train_iterator: Iterable[List[str]] = iterator
     else:
         texts = load_kobza_corpus(args.samples)
